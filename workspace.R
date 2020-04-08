@@ -34,7 +34,7 @@
     {
       library(h2o)
       library(lime)
-      h2o.init(port = 12345)
+      h2o.init()
     }
     
     # modeling ----
@@ -80,11 +80,11 @@
     if(! ("autokeras" %in% (installed.packages() %>% as_tibble())$Package) ){
       install.packages('autokeras')
     }
-    library(reticulate)
-    if( !('autokeras' %in% reticulate::conda_list(conda = '/opt/conda/bin/conda')$name) ){          
-      reticulate::conda_create(envname = 'autokeras', packages = 'python=3.6', conda = '/opt/conda/bin/conda')
-    }
-    reticulate::use_condaenv(condaenv = 'autokeras', conda = '/opt/conda/bin/conda')
+    # library(reticulate)
+    # if( !('autokeras' %in% reticulate::conda_list(conda = '/opt/conda/bin/conda')$name) ){          
+    #   reticulate::conda_create(envname = 'autokeras', packages = 'python=3.6', conda = '/opt/conda/bin/conda')
+    # }
+    reticulate::use_virtualenv()
     
     library(autokeras)
     library(keras)
@@ -201,7 +201,7 @@
       }
     }
     
-    lookback   =  5 # Observations will go back 10 days.
+    lookback   =  5 # Observations will go back 5 rows
     step       =  1 # Observations will be sampled at one data point per day.
     delay      =  0 # uninteresting for the tests
     batch_size = 30 # 
@@ -278,10 +278,17 @@
     # https://github.com/tensorflow/tensorflow/issues/36919
     # but it works with TensorFlow 2.0.0
     
+    # here still the GPU memeory is used
+    # how to release it?
+    
+    evaluate_generator(model, test_gen, test_steps)
+    dir.create('models/tensorflow/', recursive = T, showWarnings = F)
+    save_model_hdf5(model, filepath = 'models/tensorflow/basic.h5')
+    
     return (model)
   }
-
-  basicRNNtest <- function(data = testData){
+  
+  basicRNN_test <- function(data = testData){
     # set up ----
     {
       library(reticulate)
@@ -338,19 +345,331 @@
       loss = "mae"
     )
     
-    tensorboard("models/logs/run_basicTF")
+    tensorboard("models/logs/run_basicRNN")
     history <- model %>% fit_generator(
       train_gen,
       steps_per_epoch = 500,
       epochs = 20,
       validation_data = val_gen,
       validation_steps = val_steps,
-      callbacks = callback_tensorboard("models/logs/run_basicTF")
+      callbacks = callback_tensorboard("models/logs/run_basicRNN")
     )
-
+    
+    evaluate_generator(model, test_gen, test_steps)
+    dir.create('models/tensorflow/', recursive = T, showWarnings = F)
+    save_model_hdf5(model, filepath = 'models/tensorflow/RNN.h5')
+    
     return (model)
   }
   
+  basicRNN_w_dropout_test <- function(data = testData){
+    # set up ----
+    {
+      library(reticulate)
+      use_condaenv(condaenv = 'r-reticulate', conda = '/opt/conda/bin/conda')
+      train_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = 1,
+        max_index = floor(nrow(data)*(8/10)),
+        shuffle = FALSE,
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      val_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(8/10)) + 1,
+        max_index = floor(nrow(data)*(9/10)),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      test_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(9/10)) + 1,
+        max_index = nrow(data),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      # # How many steps to draw from val_gen in order to see the entire validation set
+      val_steps <- (floor(nrow(data)*(9/10)) - floor(nrow(data)*(8/10)) + 1 - lookback) / batch_size
+      # 
+      # # How many steps to draw from test_gen in order to see the entire test set
+      test_steps <- (nrow(data) - floor(nrow(data)*(9/10)) + 1 - lookback) / batch_size
+    }
+    
+    library(keras)
+    model <- keras_model_sequential() %>% 
+      layer_gru(units = 32, dropout = 0.2, recurrent_dropout = 0.2,
+                input_shape = list(NULL, dim(data)[[-1]])) %>% 
+      layer_dense(units = 1)
+    # at this point rsession needs 10GB more of GPU memory
+    
+    model %>% compile(
+      optimizer = optimizer_rmsprop(),
+      loss = "mae"
+    )
+    
+    tensorboard("models/logs/run_basicRNN_w_dropout")
+    history <- model %>% fit_generator(
+      train_gen,
+      steps_per_epoch = 500,
+      epochs = 20,
+      validation_data = val_gen,
+      validation_steps = val_steps,
+      callbacks = callback_tensorboard("models/logs/run_basicRNN_w_dropout")
+    )
+    
+    evaluate_generator(model, test_gen, test_steps)
+    dir.create('models/tensorflow/', recursive = T, showWarnings = F)
+    save_model_hdf5(model, filepath = 'models/tensorflow/RNN_w_dropout.h5')
+    
+    return (model)
+  }
+  
+  basicStackedRNN_test <- function(data = testData){
+    # set up ----
+    {
+      library(reticulate)
+      use_condaenv(condaenv = 'r-reticulate', conda = '/opt/conda/bin/conda')
+      train_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = 1,
+        max_index = floor(nrow(data)*(8/10)),
+        shuffle = FALSE,
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      val_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(8/10)) + 1,
+        max_index = floor(nrow(data)*(9/10)),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      test_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(9/10)) + 1,
+        max_index = nrow(data),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      # # How many steps to draw from val_gen in order to see the entire validation set
+      val_steps <- (floor(nrow(data)*(9/10)) - floor(nrow(data)*(8/10)) + 1 - lookback) / batch_size
+      # 
+      # # How many steps to draw from test_gen in order to see the entire test set
+      test_steps <- (nrow(data) - floor(nrow(data)*(9/10)) + 1 - lookback) / batch_size
+    }
+    
+    library(keras)
+    model <- keras_model_sequential() %>% 
+      layer_gru(units = 32, 
+                dropout = 0.1, 
+                recurrent_dropout = 0.5,
+                return_sequences = TRUE,
+                input_shape = list(NULL, dim(data)[[-1]])) %>% 
+      layer_gru(units = 64, activation = "relu",
+                dropout = 0.1,
+                recurrent_dropout = 0.5) %>% 
+      layer_dense(units = 1)
+    
+    model %>% compile(
+      optimizer = optimizer_rmsprop(),
+      loss = "mae"
+    )
+    
+    tensorboard("models/logs/run_basicStackedRNN")
+    history <- model %>% fit_generator(
+      train_gen,
+      steps_per_epoch = 500,
+      epochs = 40,
+      validation_data = val_gen,
+      validation_steps = val_steps,
+      callbacks = callback_tensorboard("models/logs/run_basicStackedRNN")
+    )
+    
+    evaluate_generator(model, test_gen, test_steps)
+    dir.create('models/tensorflow/', recursive = T, showWarnings = F)
+    save_model_hdf5(model, filepath = 'models/tensorflow/stackedRNN.h5')
+    
+    return (model)
+  }
+  
+  basicBidirectionalRNN_test <- function(data = testData){
+    # set up ----
+    {
+      library(reticulate)
+      use_condaenv(condaenv = 'r-reticulate', conda = '/opt/conda/bin/conda')
+      train_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = 1,
+        max_index = floor(nrow(data)*(8/10)),
+        shuffle = FALSE,
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      val_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(8/10)) + 1,
+        max_index = floor(nrow(data)*(9/10)),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      test_gen <- generator(
+        as.matrix(data),
+        lookback = lookback,
+        delay = delay,
+        min_index = floor(nrow(data)*(9/10)) + 1,
+        max_index = nrow(data),
+        step = step,
+        batch_size = batch_size
+      )
+      
+      
+      # # How many steps to draw from val_gen in order to see the entire validation set
+      val_steps <- (floor(nrow(data)*(9/10)) - floor(nrow(data)*(8/10)) + 1 - lookback) / batch_size
+      # 
+      # # How many steps to draw from test_gen in order to see the entire test set
+      test_steps <- (nrow(data) - floor(nrow(data)*(9/10)) + 1 - lookback) / batch_size
+    }
+    
+    library(keras)
+    model <- keras_model_sequential() %>% 
+      layer_embedding(input_dim = max_features, output_dim = 32) %>% 
+      bidirectional(
+        layer_lstm(units = 32)
+      ) %>% 
+      layer_dense(units = 1, activation = "sigmoid")
+    model %>% compile(
+      optimizer = "rmsprop",
+      loss = "binary_crossentropy",
+      metrics = c("acc")
+    )
+    
+    tensorboard("models/logs/run_basicBidirectionalRNN")
+    history <- model %>% fit(
+      x_train, y_train,
+      epochs = 40,
+      batch_size = 128,
+      validation_split = 0.2,
+      callbacks = callback_tensorboard("models/logs/run_basicBidirectionalRNN")
+    )    
+    
+    evaluate_generator(model, test_gen, test_steps)
+    dir.create('models/tensorflow/', recursive = T, showWarnings = F)
+    save_model_hdf5(model, filepath = 'models/tensorflow/biRNN.h5')
+    return (model)
+  }
+}
+
+{ # test the nbt model
+  # library(keras)
+  # library(ini)
+  # ini        <- ini::read.ini('../nbt/10_Models/FOREX_EURRUB_close/20200327/model.ini')
+  # model      <- load_model_hdf5(paste('../nbt', ini[['model']]$filename.1, sep = '/'))
+  # model_data <- read.csv(paste('../nbt', ini[['data']]$file, sep = '/'))
+  # sd         <- ini[['normalizer']]$sd
+  # mean       <- ini[['normalizer']]$mean
+  # 
+  # unscale <- function(df, sd=std, mean=mean){
+  #   unscaled <- foreach(c = iter(df, by='col'), .combine = cbind ) %do% {
+  #     return ( tibble::enframe( c * sd + mean,
+  #                               name = NULL) )
+  #   }
+  #   names(unscaled) <- names(df)
+  #   return (unscaled)
+  # }
+  # 
+  # lookback   = 10
+  # delay      = 1
+  # min_index  = 1
+  # max_index  = nrow(model_data)
+  # batch_size = 30
+  # step       = 1
+  # # data preparation
+  # # comming from https://blogs.rstudio.com/tensorflow/posts/2017-12-20-time-series-forecasting-with-recurrent-neural-networks/
+  # 
+  # generator <- function(data, lookback, delay, 
+  #                       min_index, max_index,
+  #                       shuffle = FALSE, batch_size, step) {
+  #   if (is.null(max_index))
+  #     max_index <- nrow(data) - delay - 1
+  #   i <- min_index + lookback
+  #   function() {
+  #     if (shuffle) {
+  #       rows <- sample(c((min_index+lookback):max_index), size = batch_size)
+  #     } else {
+  #       if (i + batch_size >= max_index)
+  #         i <<- min_index + lookback
+  #       rows <- c(i:min(i+batch_size, max_index))
+  #       i <<- i + length(rows)
+  #     }
+  #     
+  #     samples <- array(0, dim = c(length(rows), 
+  #                                 lookback / step,
+  #                                 dim(data)[[-1]]))
+  #     targets <- array(0, dim = c(length(rows)))
+  #     
+  #     for (j in 1:length(rows)) {
+  #       indices <- seq(rows[[j]] - lookback, rows[[j]] - 1, 
+  #                      length.out = dim(samples)[[2]])
+  #       samples[j,,] <- data[indices,]
+  #       targets[[j]] <- data[rows[[j]] + delay, 1]
+  #     }            
+  #     
+  #     list(samples, targets)
+  #   }
+  # }
+  # 
+  # data_gen <- generator(data = as.matrix(model_data), lookback, delay = delay, 
+  #                       min_index=1, max_index=NULL,
+  #                       shuffle = FALSE, batch_size=batch_size, step=step )
+  # predictions <- model %>% predict_generator(generator = data_gen, steps = nrow(model_data))
+  
+}
+
+
+
+# cloudml ----
+{
+  GCloud_test <- function() {
+    # set-up
+    {
+      library(cloudml)
+      gcloud_init()
+    }
+    
+  }
 }
 
 
@@ -363,5 +682,6 @@
 # setUpAutokeras() # run this once to install the right tensorflow version 
 # train_tbl %>% autokeras_test()
 
-# basicTFtest()
-# basicRNNtest()
+# model <- basicTFtest()
+# model <- basicRNNtest()
+# model <- basicRNN_w_dropout_test()
